@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OMOB Dashboard - Supabase</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Supabase JS -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js/dist/umd/supabase.min.js"></script>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+    .page { display:block; padding:16px; }
+    .table-cell { padding:8px; border-bottom:1px solid #e5e7eb; }
+    .btn { padding:6px 10px; border-radius:6px; background:#2563eb; color:white; font-weight:600; }
+    .btn-muted { background:#f3f4f6; color:#111827; border:1px solid #e5e7eb; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <header class="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-6">
+    <div class="container mx-auto flex items-center justify-between">
+      <h1 class="text-xl font-bold">One Machine One Book — Supabase</h1>
+      <div id="status" class="text-sm">Connecting...</div>
+    </div>
+  </header>
+
+  <main class="container mx-auto p-6 space-y-6">
+
+    <!-- SUMMARY -->
+    <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="p-4 bg-white rounded shadow"><div>Total Mesin</div><div id="totalMachines" class="text-2xl font-bold">—</div></div>
+      <div class="p-4 bg-white rounded shadow"><div>Dokumen Lengkap</div><div id="completeMachines" class="text-2xl font-bold">—</div></div>
+      <div class="p-4 bg-white rounded shadow"><div>Dokumen Kurang</div><div id="incompleteMachines" class="text-2xl font-bold">—</div></div>
+      <div class="p-4 bg-white rounded shadow"><div>SOP Akan Expired</div><div id="expiringSOP" class="text-2xl font-bold">—</div></div>
+    </section>
+
+    <!-- OMOB Table with Pagination -->
+    <section class="bg-white p-4 rounded shadow">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-bold">Dokumen Belum Lengkap (OMOB)</h2>
+        <div class="flex items-center space-x-2">
+          <button id="refreshBtn" class="btn">Refresh</button>
+        </div>
+      </div>
+
+      <div id="omobTable" class="w-full overflow-x-auto">
+        <!-- table rendered here -->
+      </div>
+
+      <div class="flex items-center justify-between mt-3">
+        <div>
+          <button id="omobPrev" class="btn-muted mr-2">Previous</button>
+          <button id="omobNext" class="btn">Next</button>
+        </div>
+        <div>Page <span id="omobPage">1</span></div>
+      </div>
+    </section>
+
+    <!-- OPL Table with Pagination -->
+    <section class="bg-white p-4 rounded shadow">
+      <h2 class="font-bold mb-3">Database OPL</h2>
+      <div id="oplTable"></div>
+
+      <div class="flex items-center justify-between mt-3">
+        <div>
+          <button id="oplPrev" class="btn-muted mr-2">Previous</button>
+          <button id="oplNext" class="btn">Next</button>
+        </div>
+        <div>Page <span id="oplPage">1</span></div>
+      </div>
+    </section>
+
+  </main>
+
+<script>
+/* ====== CONFIG: Supabase credential yang lo kasih (simpan privat) ====== */
+const SUPABASE_URL = "https://biihuothvdmjdqjflwfx.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJpaWh1b3RodmRtamRxamZsd2Z4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjIyMjY1MDYsImV4cCI6MjA3NzgwMjUwNn0.ML3ofpxCjS-x4U1a72S2onn1GkRiBTgO3IfshN9680g";
+/* ======================================================= */
+
+const supabase = supabaseLib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* Pagination state */
+const PAGE_SIZE = 10;
+let omobPage = 1;
+let oplPage = 1;
+
+/* DOM refs */
+const statusEl = document.getElementById('status');
+const totalMachinesEl = document.getElementById('totalMachines');
+const completeMachinesEl = document.getElementById('completeMachines');
+const incompleteMachinesEl = document.getElementById('incompleteMachines');
+const expiringSOPEl = document.getElementById('expiringSOP');
+
+const omobTableEl = document.getElementById('omobTable');
+const omobPageEl = document.getElementById('omobPage');
+const omobPrevBtn = document.getElementById('omobPrev');
+const omobNextBtn = document.getElementById('omobNext');
+
+const oplTableEl = document.getElementById('oplTable');
+const oplPageEl = document.getElementById('oplPage');
+const oplPrevBtn = document.getElementById('oplPrev');
+const oplNextBtn = document.getElementById('oplNext');
+
+document.getElementById('refreshBtn').addEventListener('click', () => { loadAll(); });
+
+omobPrevBtn.addEventListener('click', () => { if (omobPage>1) { omobPage--; loadOMOB(); } });
+omobNextBtn.addEventListener('click', () => { omobPage++; loadOMOB(); });
+oplPrevBtn.addEventListener('click', () => { if (oplPage>1) { oplPage--; loadOPL(); } });
+oplNextBtn.addEventListener('click', () => { oplPage++; loadOPL(); });
+
+/* Connectivity check */
+async function testConnection(){
+  try {
+    const { data, error } = await supabase.from('omob').select('id').limit(1);
+    if (error) throw error;
+    statusEl.textContent = "Connected ✓";
+  } catch (err) {
+    statusEl.textContent = "Connection failed (check URL/key)";
+    console.error(err);
+  }
+}
+
+/* Load summary & tables */
+async function loadAll(){
+  await testConnection();
+  await Promise.all([ loadSummary(), loadOMOB(), loadOPL() ]);
+}
+
+/* SUMMARY: compute totals from OMOB table (simple aggregated client-side) */
+async function loadSummary(){
+  try {
+    const { data, error } = await supabase
+      .from('omob')
+      .select('*');
+    if (error) throw error;
+    const machines = {}; // unique machine by machine_name + room
+    let completeCount = 0;
+    let incompleteCount = 0;
+    let expiringCount = 0;
+
+    const today = new Date();
+    data.forEach(row=>{
+      const key = (row.machine_name||'') + '||' + (row.room_number||'');
+      machines[key] = machines[key] || { docs: [] };
+      machines[key].docs.push(row);
+
+      // status counting per row
+      const status = (row.status||'').toLowerCase();
+      if (status === 'complete' || status === 'lengkap' || status === 'ada') completeCount++;
+      else incompleteCount++;
+
+      // expiry: check review_date or issued_date + 1 year
+      let refDate = row.review_date || row.issued_date;
+      if (refDate){
+        const d = new Date(refDate);
+        if (!isNaN(d.getTime())){
+          d.setFullYear(d.getFullYear()+1);
+          const diffDays = Math.ceil((d - today)/(1000*60*60*24));
+          if (diffDays <= 90) expiringCount++;
+        }
+      }
+    });
+
+    totalMachinesEl.textContent = Object.keys(machines).length;
+    completeMachinesEl.textContent = completeCount;
+    incompleteMachinesEl.textContent = incompleteCount;
+    expiringSOPEl.textContent = expiringCount;
+  } catch(err){
+    console.error('loadSummary', err);
+  }
+}
+
+/* OMOB pagination fetch (server-side style using range) */
+async function loadOMOB(){
+  try {
+    const from = (omobPage - 1)*PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+    // We want to show "incomplete" entries only in this table as per original; adjust filter as needed
+    const { data, error, count } = await supabase
+      .from('omob')
+      .select('*', { count: 'exact' })
+      .order('id', { ascending: true })
+      .range(from, to);
+    if (error) throw error;
+
+    renderOMOBTable(data);
+    omobPageEl.textContent = omobPage;
+    // if no data and not first page, go back one page
+    if (data.length === 0 && omobPage > 1) { omobPage--; loadOMOB(); }
+  } catch(err){
+    console.error('loadOMOB', err);
+  }
+}
+
+function renderOMOBTable(rows){
+  let html = `<table class="min-w-full"><thead><tr>
+    <th class="table-cell">Mesin</th><th class="table-cell">Ruangan</th><th class="table-cell">Jenis Dokumen</th>
+    <th class="table-cell">Judul</th><th class="table-cell">No Dokumen</th><th class="table-cell">Status</th>
+  </tr></thead><tbody>`;
+  rows.forEach(r=>{
+    html += `<tr>
+      <td class="table-cell">${escapeHtml(r.machine_name||'')}</td>
+      <td class="table-cell">${escapeHtml(r.room_number||'')}</td>
+      <td class="table-cell">${escapeHtml(r.doc_type||'')}</td>
+      <td class="table-cell">${escapeHtml(r.doc_title||'')}</td>
+      <td class="table-cell">${escapeHtml(r.doc_number||'')}</td>
+      <td class="table-cell">${escapeHtml(r.status||'')}</td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  omobTableEl.innerHTML = html;
+}
+
+/* OPL pagination */
+async function loadOPL(){
+  try {
+    const from = (oplPage - 1)*PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from('opl')
+      .select('*')
+      .order('id', { ascending: true })
+      .range(from, to);
+    if (error) throw error;
+    renderOPLTable(data);
+    oplPageEl.textContent = oplPage;
+    if (data.length === 0 && oplPage > 1) { oplPage--; loadOPL(); }
+  } catch(err){
+    console.error('loadOPL', err);
+  }
+}
+
+function renderOPLTable(rows){
+  let html = `<table class="min-w-full"><thead><tr>
+    <th class="table-cell">Judul OPL</th><th class="table-cell">Nomor</th><th class="table-cell">Rev</th>
+    <th class="table-cell">Penyusun</th><th class="table-cell">Issued</th><th class="table-cell">Area</th>
+  </tr></thead><tbody>`;
+  rows.forEach(r=>{
+    html += `<tr>
+      <td class="table-cell">${escapeHtml(r.title||'')}</td>
+      <td class="table-cell">${escapeHtml(r.opl_number||'')}</td>
+      <td class="table-cell">${escapeHtml(r.revision||'')}</td>
+      <td class="table-cell">${escapeHtml(r.author||'')}</td>
+      <td class="table-cell">${escapeHtml(r.issued_date||'')}</td>
+      <td class="table-cell">${escapeHtml(r.machine_area||'')}</td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  oplTableEl.innerHTML = html;
+}
+
+/* Realtime subscription: update when OMOB or OPL changes */
+function setupRealtime(){
+  // OMOB
+  supabase
+    .from('omob')
+    .on('*', payload => {
+      console.log('omob realtime', payload);
+      loadAll(); // simple approach: reload summary & tables (kecepatan oke untuk dataset kecil)
+    })
+    .subscribe();
+
+  // OPL
+  supabase
+    .from('opl')
+    .on('*', payload => {
+      console.log('opl realtime', payload);
+      loadAll();
+    })
+    .subscribe();
+}
+
+/* little helper */
+function escapeHtml(str){ return String(str||'').replace(/[&<>"']/g, (m)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+
+/* init */
+(async function init(){
+  await loadAll();
+  setupRealtime();
+})();
+</script>
+
+</body>
+</html>
